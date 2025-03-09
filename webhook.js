@@ -10,23 +10,29 @@ require('dotenv').config();
 const app = express();
 app.use(bodyParser.json());
 
-// Create a bot instance with webhook options
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Validate environment variables
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  console.error('TELEGRAM_BOT_TOKEN not provided!');
+  process.exit(1);
+}
+
+// Create a bot instance
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   webHook: {
     port: process.env.PORT || 8080
   }
 });
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
   try {
     const { message } = req.body;
-    console.log('Received message:', message); // Debug log
+    console.log('Received message:', message);
     
     if (!message) {
       return res.sendStatus(200);
@@ -45,16 +51,11 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Start server and set webhook
+// Start server
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
   
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
-    console.error('TELEGRAM_BOT_TOKEN not provided!');
-    return;
-  }
-
   try {
     // Delete any existing webhook
     await bot.deleteWebHook();
@@ -68,6 +69,7 @@ app.listen(PORT, async () => {
         console.log('Webhook set successfully!');
       } else {
         console.error('Failed to set webhook');
+        process.exit(1);
       }
     } else {
       console.log('WEBHOOK_URL not provided, bot will work in polling mode');
@@ -75,5 +77,14 @@ app.listen(PORT, async () => {
     }
   } catch (error) {
     console.error('Error setting up bot:', error);
+    process.exit(1);
+  }
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Please try a different port.`);
+    process.exit(1);
+  } else {
+    console.error('Server error:', err);
+    process.exit(1);
   }
 });
