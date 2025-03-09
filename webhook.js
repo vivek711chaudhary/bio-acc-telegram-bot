@@ -13,8 +13,13 @@ app.use(bodyParser.json());
 // Create a bot instance with webhook options
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   webHook: {
-    port: process.env.PORT || 3000
+    port: process.env.PORT || 8080
   }
+});
+
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Webhook endpoint
@@ -40,36 +45,35 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.send('Bot is running!');
-});
-
 // Start server and set webhook
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
   
-  // Set webhook
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    console.error('TELEGRAM_BOT_TOKEN not provided!');
+    return;
+  }
+
   try {
     // Delete any existing webhook
     await bot.deleteWebHook();
     
-    // Set the new webhook
-    const webhookUrl = process.env.WEBHOOK_URL;
-    console.log('Setting webhook to:', webhookUrl);
-    const result = await bot.setWebHook(webhookUrl);
-    
-    if (result) {
-      console.log('Webhook set successfully!');
+    // Set the new webhook if WEBHOOK_URL is provided
+    if (process.env.WEBHOOK_URL) {
+      console.log('Setting webhook to:', process.env.WEBHOOK_URL);
+      const result = await bot.setWebHook(process.env.WEBHOOK_URL);
+      
+      if (result) {
+        console.log('Webhook set successfully!');
+      } else {
+        console.error('Failed to set webhook');
+      }
     } else {
-      console.error('Failed to set webhook');
+      console.log('WEBHOOK_URL not provided, bot will work in polling mode');
+      bot.startPolling();
     }
-    
-    // Get webhook info for debugging
-    const webhookInfo = await bot.getWebHookInfo();
-    console.log('Webhook info:', webhookInfo);
   } catch (error) {
-    console.error('Error setting webhook:', error);
+    console.error('Error setting up bot:', error);
   }
 });
