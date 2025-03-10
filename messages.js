@@ -1,3 +1,7 @@
+const fetch = require('node-fetch');
+
+const TOGETHER_API_ENDPOINT = 'https://api.together.xyz/v1/completions';
+
 const SYSTEM_PROMPT = `You are BioACC Bot, an expert AI assistant focused on BIO/ACC (Biological Accelerationism) and related fields.
 
 CORE CAPABILITIES:
@@ -57,318 +61,175 @@ IMPORTANT HANDLING INSTRUCTIONS:
 - When replying to a specific user, mention their name at the beginning
 - Adapt response length dynamically based on context clues (detailed, medium, brief)`;
 
-async function generateAIResponse(query, context = [], type = 'general', userMention = null, lengthPreference = 'auto') {
+const bioAccContent = require('./bio_acc_content');
+
+async function generateAIResponse(prompt) {
   try {
-    // Build context from previous messages
-    const conversationContext = context.length > 0 
-      ? `Previous conversation context:\n${context.join('\n')}\n\n`
-      : '';
+    if (!process.env.TOGETHER_API_KEY) {
+      console.log('Together AI key not found, using fallback responses');
+      return getFallbackResponse(prompt);
+    }
 
-    // Detect query type and requirements
-    const isDetailedRequest = query.toLowerCase().includes('in detail') || 
-                            query.toLowerCase().includes('explain') ||
-                            query.toLowerCase().includes('words') ||
-                            query.toLowerCase().includes('elaborate') ||
-                            query.toLowerCase().includes('comprehensive');
+    const { desciTopics, bioAccTopics } = require('./knowledge-base');
     
-    const isShortRequest = query.toLowerCase().includes('briefly') ||
-                         query.toLowerCase().includes('short answer') ||
-                         query.toLowerCase().includes('quick') ||
-                         query.toLowerCase().includes('summarize');
+    const systemPrompt = `You are BioACC Bot, focused exclusively on biotechnology, BIO/ACC principles, and scientific advancement.
     
-    const wordCountMatch = query.match(/(\d+)\s*words/);
-    const requestedWordCount = wordCountMatch ? parseInt(wordCountMatch[1]) : 0;
-
-    // Calculate appropriate token length based on detected preferences
-    let targetTokens = 0;
+    Your knowledge base includes:
     
-    if (lengthPreference === 'auto') {
-      if (requestedWordCount) {
-        targetTokens = requestedWordCount * 2;
-      } else if (isDetailedRequest) {
-        targetTokens = 2000;
-      } else if (isShortRequest) {
-        targetTokens = 600;
-      } else {
-        targetTokens = 1200; // medium default
-      }
-    } else if (lengthPreference === 'detailed') {
-      targetTokens = 2000;
-    } else if (lengthPreference === 'brief') {
-      targetTokens = 600;
-    } else {
-      targetTokens = 1200; // medium default
-    }
-
-    // Extract the core question by removing word count requirements
-    const coreQuestion = query.replace(/\s*in\s+\d+\s+words\s*/i, ' ');
-
-    // User mention formatting
-    const userGreeting = userMention ? `@${userMention}, ` : '';
-
-    let enhancedPrompt = '';
+    BIO/ACC Core Topics:
+    ${JSON.stringify(bioAccTopics.introduction)}
+    ${JSON.stringify(bioAccTopics.principles)}
+    ${JSON.stringify(bioAccTopics.technologies)}
     
-    switch(type) {
-      case 'detailed':
-        enhancedPrompt = `Provide a comprehensive analysis of: ${coreQuestion}
-
-        ${userMention ? `This is a direct reply to user @${userMention}. Start your response addressing them.` : ''}
-
-        Required sections with emoji headers:
-        1. 🧬 Core Concepts and Principles
-        2. 🔬 Technical Details and Mechanisms
-        3. 🧪 Research and Developments
-        4. 🧫 Practical Applications
-        5. 🦠 Future Implications
-        6. 🦾 Connections to BIO/ACC Philosophy
-
-        Format your response with clear headers, bullet points where appropriate, and relevant emojis to enhance readability.
-        
-        ${conversationContext}
-        Include specific examples, technical details, and real-world applications.
-        ${requestedWordCount ? `Target length: approximately ${requestedWordCount} words.` : ''}`;
-        break;
-
-      case 'technical':
-        enhancedPrompt = `Provide a technical analysis of: ${coreQuestion}
-
-        ${userMention ? `This is a direct reply to user @${userMention}. Start your response addressing them.` : ''}
-
-        Include these sections with emoji headers:
-        - 🧬 Scientific Principles and Mechanisms
-        - 🔬 Technical Specifications
-        - 🧪 Research Evidence
-        - 🧫 Implementation Details
-        - 🦠 Current Limitations and Challenges
-        - 🦾 Future Developments
-
-        Format your response with clear headers, bullet points for technical details, and relevant emojis to enhance readability.
-        
-        ${conversationContext}
-        ${requestedWordCount ? `Target length: approximately ${requestedWordCount} words.` : ''}`;
-        break;
-
-      case 'community':
-        enhancedPrompt = `Generate engaging community content: ${coreQuestion}
-
-        ${userMention ? `This is a direct reply to user @${userMention}. Start your response addressing them.` : ''}
-
-        Create content that is:
-        - Engaging and conversation-starting
-        - Relevant to BIO/ACC interests
-        - Educational yet accessible
-        - Formatted with emojis for visual appeal
-        
-        ${conversationContext}
-        ${requestedWordCount ? `Target length: approximately ${requestedWordCount} words.` : ''}`;
-        break;
-
-      default:
-        enhancedPrompt = `Provide a detailed response about: ${coreQuestion}
-
-        ${userMention ? `This is a direct reply to user @${userMention}. Start your response addressing them.` : ''}
-
-        Requirements:
-        - Clear explanation of concepts
-        - Specific examples and references
-        - Technical accuracy
-        - Practical implications
-        - Connections to related topics
-        ${requestedWordCount ? `- Target length: approximately ${requestedWordCount} words` : ''}
-
-        Format your response with emoji headers (🧬 🔬 🧪 🧫 🦠 🦾), bullet points where appropriate, and relevant emojis to enhance readability.
-        
-        ${conversationContext}
-        If you cannot provide a complete response, provide the most helpful partial response possible.`;
-    }
-
-    // Implementing retry logic with fallback strategies
-    let attemptCount = 0;
-    let generatedText = '';
-    const maxAttempts = 3;
-
-    while (attemptCount < maxAttempts && (!generatedText || generatedText.length < 100)) {
-      attemptCount++;
-      
-      // Adjust temperature based on attempt number
-      const temperature = 0.7 + (attemptCount * 0.1); // Increase randomness with each attempt
-      
-      // For retry attempts, simplify the prompt
-      const retryPrompt = attemptCount > 1 ? 
-        `You are an expert on BIO/ACC and related topics. ${userMention ? `This is a reply to @${userMention}. ` : ''}Please provide information about: ${coreQuestion}. Use emojis like 🧬 🔬 🧪 🧫 🦠 🦾 in your response for better readability.` :
-        enhancedPrompt;
-        
-      try {
-        const response = await fetch('https://api.together.xyz/v1/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-            prompt: `${SYSTEM_PROMPT}\n\nUser: ${retryPrompt}\nAssistant:`,
-            max_tokens: Math.min(4000, targetTokens), // Increased max tokens
-            temperature: temperature,
-            top_p: 0.9,
-            top_k: 50,
-            stop: ['User:', '\n\n\n']
-          })
-        });
-
-        const data = await response.json();
-        if (data.error) {
-          console.error(`Together AI error (attempt ${attemptCount}):`, data.error);
-          continue; // Try again with different parameters
-        }
-
-        generatedText = data.choices[0].text.trim();
-        
-        // If we have some content, break the loop
-        if (generatedText && generatedText.length >= 100) {
-          break;
-        }
-      } catch (error) {
-        console.error(`Error in attempt ${attemptCount}:`, error);
-      }
-      
-      // Wait briefly before retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    // Fallback response if all attempts failed
-    if (!generatedText || generatedText.length < 100) {
-      return `${userGreeting}🧬 *BIO/ACC Topic: ${coreQuestion}*\n\nI understand you're interested in this fascinating area of biological accelerationism. While I'm currently having trouble generating a complete response, here's what I can tell you:\n\n🔬 BIO/ACC explores enhancing human capabilities through advanced biotechnology\n🧪 It sits at the intersection of transhumanism and accelerationist philosophy\n🦾 Would you like me to try answering a more specific aspect of this topic?`;
-    }
-
-    // Enhanced UI formatting: Add emoji to headers if not present
-    let enhancedText = generatedText;
+    DeSci Topics:
+    ${JSON.stringify(desciTopics.introduction)}
+    ${JSON.stringify(desciTopics.benefits)}
+    ${JSON.stringify(desciTopics.projects)}
     
-    // Add user mention at the start if provided and not already included
-    if (userMention && !enhancedText.toLowerCase().includes(`@${userMention.toLowerCase()}`)) {
-      enhancedText = `${userGreeting}${enhancedText}`;
-    }
-    
-    // Replace simple headers with emoji headers if they don't have emojis already
-    if (!enhancedText.includes('# 🧬') && !enhancedText.includes('## 🧬')) {
-      // Define emoji mapping for different header topics
-      const emojiMap = {
-        'introduction': '🧬',
-        'overview': '🧬',
-        'core': '🧬',
-        'concept': '🧬',
-        'technical': '🔬',
-        'detail': '🔬',
-        'mechanism': '🔬',
-        'research': '🧪',
-        'example': '🧪',
-        'application': '🧫',
-        'related': '🧫',
-        'current': '🦠',
-        'development': '🦠',
-        'future': '🦠',
-        'practical': '🦾',
-        'implication': '🦾',
-        'conclusion': '🦾',
-        'quiz': '🧠',
-        'poll': '📊',
-        'challenge': '🏆',
-        'news': '📰',
-        'discussion': '💬',
-        'topic': '🗣️',
-        'meme': '😂'
-      };
-      
-      // Process headers with regex
-      enhancedText = enhancedText.replace(/(?:^|\n)(#+\s*)([^#\n]+)/g, (match, headerMarks, headerText) => {
-        // Check if header already has an emoji
-        if (/[\u{1F300}-\u{1F6FF}]/u.test(headerText)) {
-          return match;
-        }
-        
-        // Find appropriate emoji for this header
-        let emoji = '🧬'; // Default emoji
-        const headerLower = headerText.toLowerCase();
-        for (const [keyword, specificEmoji] of Object.entries(emojiMap)) {
-          if (headerLower.includes(keyword)) {
-            emoji = specificEmoji;
-            break;
-          }
-        }
-        
-        return `${headerMarks}${emoji} ${headerText.trim()}`;
-      });
-    }
-    
-    // Add bullet point emojis if not present
-    if (!enhancedText.includes('• ') && !enhancedText.includes('- 🔹')) {
-      enhancedText = enhancedText.replace(/(?:^|\n)([•-]\s+)([^\n]+)/g, (match, bullet, text) => {
-        return `${bullet}🔹 ${text}`;
-      });
-    }
-    
-    // Add intro emoji and enhancement to the beginning if there's no header
-    if (!enhancedText.startsWith('#') && !enhancedText.includes('🧬') && !enhancedText.startsWith(userGreeting)) {
-      enhancedText = `${userGreeting}🧬 *${capitalizeFirstWord(coreQuestion)}*\n\n${enhancedText}`;
-    }
-    
-    // Add a conclusion emoji at the end if there isn't one already
-    if (!enhancedText.endsWith('🦾') && !enhancedText.includes('🦾 Conclusion') && 
-        !enhancedText.includes('🦾 Summary') && enhancedText.length > 500) {
-      enhancedText += `\n\n🦾 *Key Takeaway:* ${coreQuestion} represents a critical area in the BIO/ACC framework, bridging biological innovation with accelerationist philosophy.`;
+    Guidelines:
+    1. Only answer questions related to BIO/ACC, DeSci, biotechnology, or scientific advancement
+    2. If a question is outside these topics, redirect to relevant scientific aspects
+    3. Use simple text formatting without markdown
+    4. Keep responses clear and focused on scientific concepts
+    5. Include specific examples from the knowledge base
+    6. If unsure, stick to the core principles defined in the knowledge base`;
+
+    const response = await fetch(TOGETHER_API_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+        prompt: `${systemPrompt}\n\nUser: ${prompt}\n\nAssistant: Let me provide information based on our BIO/ACC and DeSci knowledge base.\n\n`,
+        max_tokens: 500,
+        temperature: 0.7,
+        top_k: 50,
+        top_p: 0.7,
+        repetition_penalty: 1.1,
+        stop: ['User:', 'Human:', '<human>:', '<user>:']
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}`);
     }
 
-    // Validate and handle word count requirement
-    if (requestedWordCount) {
-      const currentWordCount = enhancedText.split(/\s+/).length;
-      
-      // If we're significantly under the requested word count, try to extend the response
-      if (currentWordCount < requestedWordCount * 0.7 && currentWordCount > 100) {
-        try {
-          const expansionPrompt = `Continue the following text about ${coreQuestion} to reach approximately ${requestedWordCount} words total. Current word count is about ${currentWordCount}. Focus on adding more examples, details, and implications. Use emojis for formatting. Here's the current text to continue:\n\n${enhancedText.substring(0, 500)}...`;
-          
-          const expansionResponse = await fetch('https://api.together.xyz/v1/completions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              model: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-              prompt: `${SYSTEM_PROMPT}\n\nUser: ${expansionPrompt}\nAssistant:`,
-              max_tokens: 2000,
-              temperature: 0.7,
-              top_p: 0.9,
-              top_k: 50,
-              stop: ['User:', '\n\n\n']
-            })
-          });
-          
-          const expansionData = await expansionResponse.json();
-          if (!expansionData.error) {
-            const additionalText = expansionData.choices[0].text.trim();
-            if (additionalText && additionalText.length > 100) {
-              enhancedText += '\n\n' + additionalText;
-            }
-          }
-        } catch (error) {
-          console.error('Error generating expansion:', error);
-          // Continue with what we have if expansion fails
-        }
-      }
+    const data = await response.json();
+    console.log('API Response:', data); // Debug log
+
+    // Check if the response has the expected structure
+    if (!data || !data.choices || !data.choices[0] || !data.choices[0].text) {
+      console.error('Unexpected API response format:', data);
+      return getFallbackResponse(prompt);
     }
 
-    return enhancedText;
+    let cleanedResponse = data.choices[0].text
+      .trim()
+      // Convert HTML tags to Telegram-compatible formatting
+      .replace(/<b>(.*?)<\/b>/g, '*$1*')
+      .replace(/<i>(.*?)<\/i>/g, '_$1_')
+      .replace(/<u>(.*?)<\/u>/g, '__$1__')
+      .replace(/<code>(.*?)<\/code>/g, '`$1`')
+      .replace(/<pre>(.*?)<\/pre>/g, '```$1```')
+      // Remove any remaining HTML tags
+      .replace(/<[^>]*>/g, '')
+      // Replace complex bullets with simple dashes
+      .replace(/[•●]/g, '- ')
+      // Ensure proper spacing after punctuation
+      .replace(/([.!?])\s*/g, '$1 ')
+      // Add proper line breaks for lists
+      .replace(/(?:^|\n)[-•●]\s*/g, '\n• ')
+      // Normalize multiple newlines but keep paragraph structure
+      .replace(/\n{3,}/g, '\n\n')
+      // Format key terms with bold
+      .replace(/\b(BIO\/ACC|DeSci|CRISPR|mRNA)\b(?![*])/g, '*$1*')
+      // Keep essential emojis and add them to key sections
+      .replace(/🧬|🔬|🧪|🧫|🦠|🤖/, '')
+      // Add section emojis if they don't exist
+      .replace(/(?:^|\n\n)Key Points:/g, '\n\n🔑 Key Points:')
+      .replace(/(?:^|\n\n)Benefits:/g, '\n\n✨ Benefits:')
+      .replace(/(?:^|\n\n)Projects:/g, '\n\n🚀 Projects:')
+      .replace(/(?:^|\n\n)Technologies:/g, '\n\n⚡ Technologies:')
+      .replace(/(?:^|\n\n)Applications:/g, '\n\n🎯 Applications:')
+      // Clean up any double spaces
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    // If response doesn't seem to be about BIO/ACC or DeSci, add a redirect
+    if (!cleanedResponse.toLowerCase().includes('bio') && 
+        !cleanedResponse.toLowerCase().includes('science') && 
+        !cleanedResponse.toLowerCase().includes('tech')) {
+      cleanedResponse = `🧬 Let me address this from a BIO/ACC and scientific perspective:\n\n${cleanedResponse}`;
+    }
+
+    // Add a footer for longer responses
+    if (cleanedResponse.length > 500) {
+      cleanedResponse += '\n\n💡 Want to learn more? Feel free to ask specific questions about any of these topics!';
+    }
+
+    return cleanedResponse;
   } catch (error) {
     console.error('Error generating AI response:', error);
-    return `${userMention ? `@${userMention}, ` : ''}🧬 *BIO/ACC Information*\n\nI apologize, but I encountered a technical issue. Here\'s what I can tell you briefly:\n\n🔬 BIO/ACC refers to Biological Accelerationism, which explores enhancing human biology through advanced technology\n🧪 It encompasses gene editing, synthetic biology, and human augmentation\n🦾 Would you like me to try answering a more specific question about this topic?`;
+    return getFallbackResponse(prompt);
   }
 }
 
-// Helper function to capitalize first word
-function capitalizeFirstWord(str) {
-  if (!str) return '';
-  return str.charAt(0).toUpperCase() + str.slice(1);
+function getFallbackResponse(prompt) {
+  // Common static responses for frequently asked questions
+  const fallbackResponses = {
+    desci: "DeSci (Decentralized Science) is a movement to make scientific research and funding more accessible and transparent. It uses blockchain and other decentralized technologies to enable direct community funding, open access to research, and collaborative scientific work outside traditional institutions.",
+    "bio acc": "BIO/ACC (Biological Accelerationism) is a movement focused on accelerating biological and technological evolution. It emphasizes democratizing biotechnology, ethical enhancement, and aligning with natural systems while promoting open-source knowledge and efficient supply chains.",
+    crispr: "CRISPR is a revolutionary gene-editing technology that allows precise modifications to DNA. It's like a genetic scissors that can cut, edit, or insert specific genes, with applications in medicine, agriculture, and biotechnology.",
+    default: "I specialize in BIO/ACC, DeSci, and biotechnology topics. I aim to provide accurate information about scientific advancement and biological technologies. What specific aspect would you like to learn more about?"
+  };
+
+  // Check for keywords in the prompt
+  const lowerPrompt = prompt.toLowerCase();
+  if (lowerPrompt.includes('desci')) return fallbackResponses.desci;
+  if (lowerPrompt.includes('bio acc') || lowerPrompt.includes('bioacc')) return fallbackResponses["bio acc"];
+  if (lowerPrompt.includes('crispr')) return fallbackResponses.crispr;
+  return fallbackResponses.default;
+}
+
+function cleanMarkdown(text) {
+  // First, escape special characters
+  let cleaned = text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, '\\$&');
+  
+  // Replace common problematic patterns
+  cleaned = cleaned.replace(/\\{2,}/g, '\\'); // Remove multiple escapes
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Normalize multiple newlines
+  cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
+  
+  return cleaned;
+}
+
+async function generateQuizPrompt() {
+  const topic = bioAccContent.getRandomTopic();
+  const principle = bioAccContent.principles[Math.floor(Math.random() * bioAccContent.principles.length)];
+  
+  return `Generate a challenging multiple choice question about ${topic} or ${principle.title}. Focus on testing understanding of BIO/ACC concepts.
+Format exactly as:
+Question: [question]
+A) [option]
+B) [option]
+C) [option]
+D) [option]
+Correct: [A/B/C/D]
+Explanation: [explanation]`;
+}
+
+async function generateInsightPrompt() {
+  const topic = bioAccContent.getRandomTopic();
+  const principle = bioAccContent.principles[Math.floor(Math.random() * bioAccContent.principles.length)];
+  
+  return `Generate a brief insight (max 150 words) about ${topic}, focusing on ${principle.title}. 
+Keep the language clear and avoid special characters or complex formatting.
+Include:
+1. A key observation
+2. Current developments
+3. Future implications`;
 }
 
 // Enhanced message context storage with user tracking
@@ -412,22 +273,49 @@ async function generateCommunityContent(contentType) {
       "Test your knowledge: Which company created the first lab-grown beef burger? A) Beyond Meat B) Memphis Meats C) Mosa Meat D) Perfect Day",
       "BIO/ACC Quiz: Which of these is NOT a form of biohacking? A) Nutrigenomics B) Grinder implants C) Quantum entanglement D) Nootropics",
       "Quick Quiz: Which landmark biology project was completed in 2003? A) Human Genome Project B) Brain Initiative C) Human Cell Atlas D) Human Microbiome Project"
-    ],
-    'challenge': [
-      "Challenge: Share your vision of human enhancement in 280 characters or less!",
-      "Weekly challenge: Design a hypothetical biotech solution to a current environmental problem",
-      "BIO/ACC Challenge: Describe a day in the life of a human in 2073 after radical biotechnology has transformed society",
-      "Creative challenge: Pitch a science fiction story premise based on a real emerging biotechnology",
-      "Community challenge: Explain a complex biotech concept to a 10-year-old (responses will be judged on clarity and accuracy)"
     ]
   };
+
+  if (contentType === 'challenge') {
+    try {
+      const challengePrompt = `Create an engaging BIO/ACC community challenge. The challenge should be:
+1. Fun and interesting
+2. Related to biotechnology, science, or BIO/ACC principles
+3. Achievable within 1-7 days
+4. Educational and thought-provoking
+5. Safe and ethical
+
+Format the response exactly as:
+🧬 Challenge Title: [title]
+⏱️ Duration: [X days]
+🎯 Objective: [clear, concise objective]
+📋 Requirements:
+- [requirement 1]
+- [requirement 2]
+- [requirement 3]
+🌟 Bonus Goals:
+- [optional bonus goal 1]
+- [optional bonus goal 2]
+🏆 Success Criteria: [how to know when completed]
+💡 Tips: [helpful tips for completion]
+
+Make it creative and unique!`;
+
+      const response = await generateAIResponse(challengePrompt);
+      return response;
+    } catch (error) {
+      console.error('Error generating challenge:', error);
+      // Fallback to a basic challenge if AI generation fails
+      return `🧬 DIY Science Challenge\n\n⏱️ Duration: 3 days\n\n🎯 Document and share an interesting scientific observation from your daily life.\n\n📋 Requirements:\n- Make a hypothesis about something you observe\n- Design a simple experiment\n- Document your findings\n- Share with the community\n\n🌟 Bonus: Include photos or diagrams\n\n🏆 Success: Complete documentation of your mini-experiment`;
+    }
+  }
   
-  // Pick a random prompt from the category
+  // Pick a random prompt from other categories
   const prompts = topics[contentType] || topics['discussion'];
   const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
   
   // Generate content based on the prompt
-  return await generateAIResponse(randomPrompt, [], 'community', null, contentType === 'meme' ? 'brief' : 'medium');
+  return await generateAIResponse(randomPrompt);
 }
 
 // Community content scheduler
@@ -643,7 +531,7 @@ async function handleMessage(bot, message) {
         await bot.sendChatAction(chatId, 'typing');
         
         // Generate response for this specific question
-        const response = await generateAIResponse(questionText, context, type, userName, lengthPreference);
+        const response = await generateAIResponse(questionText);
         
         // Update context with this question
         context.push(questionText);
@@ -692,7 +580,7 @@ async function handleMessage(bot, message) {
 
     // Normal single-question flow
     // Generate AI response with enhanced context
-    const response = await generateAIResponse(text, context, type, userName, lengthPreference);
+    const response = await generateAIResponse(text);
     
     // Update context
     context.push(text);
@@ -746,7 +634,7 @@ async function handleMessage(bot, message) {
         const followUpPrompt = `Based on previous conversations with user @${userStats.username || 'this user'}, they've shown interest in ${Array.from(userStats.topics).slice(0,3).join(', ')}. Generate a brief, friendly follow-up question (1-2 sentences) that builds on this conversation about ${text}. Make it conversational, not like a generic FAQ.`;
         
         try {
-          const followUp = await generateAIResponse(followUpPrompt, [], 'community', null, 'brief');
+          const followUp = await generateAIResponse(followUpPrompt);
           await bot.sendMessage(chatId, followUp, {
             parse_mode: 'Markdown',
             disable_web_page_preview: true
@@ -855,5 +743,8 @@ module.exports = {
   handleMessage,
   generateAIResponse,
   CommunityContentScheduler,
-  generateCommunityContent
+  generateCommunityContent,
+  generateQuizPrompt,
+  generateInsightPrompt,
+  cleanMarkdown
 };

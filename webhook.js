@@ -24,7 +24,7 @@ if (!process.env.TELEGRAM_BOT_TOKEN) {
 // Create a bot instance
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   webHook: {
-    port: process.env.PORT || 3000
+    port: process.env.PORT || 3002
   }
 });
 
@@ -52,7 +52,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3002;
 const server = app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
   
@@ -62,8 +62,9 @@ const server = app.listen(PORT, async () => {
     
     // Set the new webhook if WEBHOOK_URL is provided
     if (process.env.WEBHOOK_URL) {
-      console.log('Setting webhook to:', process.env.WEBHOOK_URL);
-      const result = await bot.setWebHook(process.env.WEBHOOK_URL);
+      const webhookUrl = `${process.env.WEBHOOK_URL}/webhook`;
+      console.log('Setting webhook to:', webhookUrl);
+      const result = await bot.setWebHook(webhookUrl);
       
       if (result) {
         console.log('Webhook set successfully!');
